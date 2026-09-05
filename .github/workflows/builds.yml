@@ -16,9 +16,9 @@ name: Builds
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "verji-main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "verji-main"]
     paths-ignore:
       - "**/*.md"
       - ".changeset/**"
