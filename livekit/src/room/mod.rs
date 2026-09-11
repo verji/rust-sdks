@@ -205,10 +205,13 @@ pub enum RoomEvent {
         /// How the packet arrived: the encryption this room is configured with, for a packet it
         /// decrypted, or [`e2ee::EncryptionType::None`] for a packet published in the clear, which
         /// a room with encryption enabled still delivers and a receiver that requires encryption
-        /// can refuse. Never the type the packet declares, which travels in the clear. For a
-        /// decrypted packet `participant` is the one whose key decrypted it, or `None` if that
-        /// participant is not in the room. A room configured with `None` reports `None` even for
-        /// a packet it decrypted.
+        /// can refuse. Never the type the packet declares, which travels in the clear.
+        ///
+        /// For a packet reported as anything but `None`, `participant` is the one whose key
+        /// decrypted it, or `None` if that participant is not in the room. That holds with a key per
+        /// participant; with a shared key, which identity a packet decrypts under is only the SFU's
+        /// word. A room configured with `None` reports `None` even for a packet it decrypted, and
+        /// attributes it as it would a packet in the clear.
         encryption_type: e2ee::EncryptionType,
     },
     TranscriptionReceived {
@@ -1828,21 +1831,13 @@ impl RoomSession {
     ) {
         let encryption_type = e2ee::EncryptionType::from(encryption_type);
 
-        let mut participant = participant_identity
-            .as_ref()
-            .map(|identity| self.get_participant_by_identity(identity))
-            .unwrap_or(None);
-
-        // A decrypted packet belongs to the participant whose key decrypted it, which is the
-        // identity it was decrypted under, and to nobody else. The sid travels in the clear beside
-        // it and was never checked against that key, so falling back to it would let whoever
-        // forwards the packet pin one participant's encrypted data on another.
-        if participant.is_none() && encryption_type == e2ee::EncryptionType::None {
-            participant = participant_sid
+        let participant = attribute_data_packet(
+            participant_identity
                 .as_ref()
-                .map(|sid| self.get_participant_by_sid(sid))
-                .unwrap_or(None);
-        }
+                .and_then(|identity| self.get_participant_by_identity(identity)),
+            || participant_sid.as_ref().and_then(|sid| self.get_participant_by_sid(sid)),
+            encryption_type,
+        );
 
         // Update participant's data encryption status for regular data messages
         if let Some(ref p) = participant {
@@ -2529,5 +2524,51 @@ fn unpack_stream_id(stream_id: &str) -> Option<(&str, &str)> {
         Some((participant_sid, track_sid))
     } else {
         None
+    }
+}
+
+/// Who a received data packet is from.
+///
+/// A packet belongs to the participant its identity names. Only a packet that arrived in the clear
+/// falls back to its sid: a decrypted packet belongs to the participant whose key decrypted it,
+/// which is the identity it was decrypted under, and the sid travels in the clear beside it, never
+/// checked against that key. Falling back to it would let whoever forwards the packet pin one
+/// participant's encrypted data on another.
+fn attribute_data_packet<P>(
+    by_identity: Option<P>,
+    by_sid: impl FnOnce() -> Option<P>,
+    encryption_type: e2ee::EncryptionType,
+) -> Option<P> {
+    match by_identity {
+        Some(participant) => Some(participant),
+        None if encryption_type == e2ee::EncryptionType::None => by_sid(),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod attribute_data_packet_tests {
+    use super::{attribute_data_packet, e2ee::EncryptionType};
+
+    #[test]
+    fn a_packet_is_attributed_to_the_participant_its_identity_names() {
+        for encryption_type in [EncryptionType::None, EncryptionType::Gcm, EncryptionType::Custom] {
+            assert_eq!(
+                attribute_data_packet(Some("alice"), || Some("bob"), encryption_type),
+                Some("alice")
+            );
+        }
+    }
+
+    #[test]
+    fn a_packet_in_the_clear_whose_identity_is_unknown_falls_back_to_its_sid() {
+        assert_eq!(attribute_data_packet(None, || Some("bob"), EncryptionType::None), Some("bob"));
+    }
+
+    #[test]
+    fn a_decrypted_packet_whose_identity_is_unknown_is_attributed_to_nobody() {
+        for encryption_type in [EncryptionType::Gcm, EncryptionType::Custom] {
+            assert_eq!(attribute_data_packet(None, || Some("bob"), encryption_type), None);
+        }
     }
 }

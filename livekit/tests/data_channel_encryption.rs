@@ -53,6 +53,7 @@ async fn test_data_channel_encryption() -> Result<()> {
 
     let (sending_room, _) = rooms.pop().unwrap();
     let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+    let sender_identity = sending_room.local_participant().identity();
 
     sending_room.e2ee_manager().set_enabled(true);
     receiving_room.e2ee_manager().set_enabled(true);
@@ -74,10 +75,13 @@ async fn test_data_channel_encryption() -> Result<()> {
     let receive_packets = async move {
         let mut recv_idx = 0;
         while let Some(event) = receiving_event_rx.recv().await {
-            let RoomEvent::DataReceived { payload, encryption_type, .. } = event else {
+            let RoomEvent::DataReceived { payload, encryption_type, participant, .. } = event
+            else {
                 continue;
             };
             assert_eq!(encryption_type, EncryptionType::Gcm);
+            // A decrypted packet names the participant whose key decrypted it.
+            assert_eq!(participant.map(|p| p.identity()), Some(sender_identity.clone()));
             assert!(payload.iter().all(|byte| *byte == recv_idx as u8));
             recv_idx += 1;
             if recv_idx >= ITERATIONS {
