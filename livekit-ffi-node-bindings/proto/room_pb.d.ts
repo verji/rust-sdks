@@ -23,7 +23,7 @@ import type { DisconnectReason, OwnedParticipant, ParticipantInfo, ParticipantPe
 import type { FrameMetadataFeature, OwnedTrack, OwnedTrackPublication, TrackPublicationInfo, TrackSource } from "./track_pb.js";
 import type { RtcStats } from "./stats_pb.js";
 import type { VideoCodec } from "./video_frame_pb.js";
-import type { E2eeOptions, EncryptionState } from "./e2ee_pb.js";
+import type { E2eeOptions, EncryptionState, EncryptionType } from "./e2ee_pb.js";
 import type { FfiOwnedHandle } from "./handle_pb.js";
 import type { OwnedByteStreamReader, OwnedTextStreamReader } from "./data_stream_pb.js";
 import type { OwnedRemoteDataTrack } from "./data_track_pb.js";
@@ -3379,6 +3379,14 @@ export declare class UserPacket extends Message<UserPacket> {
    * @generated from field: optional string topic = 2;
    */
   topic?: string;
+
+  /**
+   * How the packet was encrypted on the wire. NONE in a room with encryption enabled is a packet
+   * its sender published in the clear.
+   *
+   * @generated from field: required livekit.proto.EncryptionType encryption_type = 3;
+   */
+  encryptionType?: EncryptionType;
 
   constructor(data?: PartialMessage<UserPacket>);
 
