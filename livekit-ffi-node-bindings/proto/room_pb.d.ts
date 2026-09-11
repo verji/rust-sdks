@@ -23,7 +23,7 @@ import type { DisconnectReason, OwnedParticipant, ParticipantInfo, ParticipantPe
 import type { FrameMetadataFeature, OwnedTrack, OwnedTrackPublication, TrackPublicationInfo, TrackSource } from "./track_pb.js";
 import type { RtcStats } from "./stats_pb.js";
 import type { VideoCodec } from "./video_frame_pb.js";
-import type { E2eeOptions, EncryptionState } from "./e2ee_pb.js";
+import type { E2eeOptions, EncryptionState, EncryptionType } from "./e2ee_pb.js";
 import type { FfiOwnedHandle } from "./handle_pb.js";
 import type { OwnedByteStreamReader, OwnedTextStreamReader } from "./data_stream_pb.js";
 import type { OwnedRemoteDataTrack } from "./data_track_pb.js";
@@ -3379,6 +3379,15 @@ export declare class UserPacket extends Message<UserPacket> {
    * @generated from field: optional string topic = 2;
    */
   topic?: string;
+
+  /**
+   * How the packet arrived: the encryption this room is configured with, for a packet it decrypted,
+   * or NONE for a packet published in the clear, which a room with encryption enabled still
+   * delivers. Never the type the packet declares, which travels in the clear.
+   *
+   * @generated from field: required livekit.proto.EncryptionType encryption_type = 3;
+   */
+  encryptionType?: EncryptionType;
 
   constructor(data?: PartialMessage<UserPacket>);
 

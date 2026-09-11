@@ -1805,7 +1805,11 @@ impl SessionInner {
             proto::data_packet::Value::EncryptedPacket(encrypted_packet) => {
                 // Handle encrypted data packets
                 if let Some(e2ee_manager) = &self.e2ee_manager {
-                    let encryption_type = encrypted_packet.encryption_type();
+                    // What this receiver decrypts with, not what the packet says it is: the packet's
+                    // own encryption type sits in the clear wrapper, where any hop can rewrite it.
+                    // A packet that reaches the emit below has been decrypted, so this is the fact.
+                    let encryption_type: proto::encryption::Type =
+                        e2ee_manager.encryption_type().into();
                     let participant_identity_str =
                         participant_identity.as_ref().map(|p| p.0.as_str()).unwrap_or("");
 

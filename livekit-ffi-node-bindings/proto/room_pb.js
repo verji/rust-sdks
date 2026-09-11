@@ -25,7 +25,7 @@ const { DisconnectReason, OwnedParticipant, ParticipantInfo, ParticipantPermissi
 const { FrameMetadataFeature, OwnedTrack, OwnedTrackPublication, TrackPublicationInfo, TrackSource } = require("./track_pb.js");
 const { RtcStats } = require("./stats_pb.js");
 const { VideoCodec } = require("./video_frame_pb.js");
-const { E2eeOptions, EncryptionState } = require("./e2ee_pb.js");
+const { E2eeOptions, EncryptionState, EncryptionType } = require("./e2ee_pb.js");
 const { FfiOwnedHandle } = require("./handle_pb.js");
 const { OwnedByteStreamReader, OwnedTextStreamReader } = require("./data_stream_pb.js");
 const { OwnedRemoteDataTrack } = require("./data_track_pb.js");
@@ -1220,6 +1220,7 @@ const UserPacket = /*@__PURE__*/ proto2.makeMessageType(
   () => [
     { no: 1, name: "data", kind: "message", T: OwnedBuffer, req: true },
     { no: 2, name: "topic", kind: "scalar", T: 9 /* ScalarType.STRING */, opt: true },
+    { no: 3, name: "encryption_type", kind: "enum", T: proto2.getEnumType(EncryptionType), req: true },
   ],
 );
 

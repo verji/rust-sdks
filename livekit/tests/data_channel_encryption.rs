@@ -53,6 +53,7 @@ async fn test_data_channel_encryption() -> Result<()> {
 
     let (sending_room, _) = rooms.pop().unwrap();
     let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+    let sender_identity = sending_room.local_participant().identity();
 
     sending_room.e2ee_manager().set_enabled(true);
     receiving_room.e2ee_manager().set_enabled(true);
@@ -74,9 +75,13 @@ async fn test_data_channel_encryption() -> Result<()> {
     let receive_packets = async move {
         let mut recv_idx = 0;
         while let Some(event) = receiving_event_rx.recv().await {
-            let RoomEvent::DataReceived { payload, .. } = event else {
+            let RoomEvent::DataReceived { payload, encryption_type, participant, .. } = event
+            else {
                 continue;
             };
+            assert_eq!(encryption_type, EncryptionType::Gcm);
+            // A decrypted packet names the participant whose key decrypted it.
+            assert_eq!(participant.map(|p| p.identity()), Some(sender_identity.clone()));
             assert!(payload.iter().all(|byte| *byte == recv_idx as u8));
             recv_idx += 1;
             if recv_idx >= ITERATIONS {
@@ -87,5 +92,161 @@ async fn test_data_channel_encryption() -> Result<()> {
     };
 
     timeout(Duration::from_secs(5), async { try_join!(send_packets, receive_packets) }).await??;
+    Ok(())
+}
+
+/// Encryption does not stop a room delivering a packet its sender published in the clear: the
+/// receiver is the only one who can refuse it, and the event is what tells it to.
+#[cfg(feature = "__lk-e2e-test")]
+#[tokio::test]
+async fn test_data_channel_reports_a_packet_sent_in_the_clear() -> Result<()> {
+    let key_provider =
+        KeyProvider::with_shared_key(KeyProviderOptions::default(), "password".as_bytes().to_vec());
+
+    let mut receiving_options = RoomOptions::default();
+    receiving_options.encryption =
+        Some(E2eeOptions { key_provider, encryption_type: EncryptionType::Gcm });
+
+    let mut rooms =
+        test_rooms_with_options([receiving_options.into(), RoomOptions::default().into()]).await?;
+
+    let (sending_room, _) = rooms.pop().unwrap();
+    let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+
+    receiving_room.e2ee_manager().set_enabled(true);
+
+    let packet =
+        DataPacket { reliable: true, payload: b"in the clear".to_vec(), ..Default::default() };
+    sending_room.local_participant().publish_data(packet).await?;
+
+    let received = timeout(Duration::from_secs(5), async {
+        while let Some(event) = receiving_event_rx.recv().await {
+            if let RoomEvent::DataReceived { payload, encryption_type, .. } = event {
+                return Some((payload, encryption_type));
+            }
+        }
+        None
+    })
+    .await?;
+
+    let (payload, encryption_type) = received.expect("the receiving room closed before the packet");
+    assert_eq!(payload.as_slice(), b"in the clear");
+    assert_eq!(encryption_type, EncryptionType::None);
+    Ok(())
+}
+
+/// What a receiver reports is the encryption it decrypted a packet under, never the type the packet
+/// declares. A sender whose own options name `None` or `Custom` still encrypts its data and puts
+/// that name in the clear wrapper, which is exactly what an SFU rewriting the field produces.
+#[cfg(feature = "__lk-e2e-test")]
+#[tokio::test]
+async fn test_data_channel_reports_the_receivers_encryption_not_the_senders_claim() -> Result<()> {
+    // (receiver configured with, sender declaring, reported)
+    let cases = [
+        (EncryptionType::Gcm, EncryptionType::None, EncryptionType::Gcm),
+        (EncryptionType::Gcm, EncryptionType::Custom, EncryptionType::Gcm),
+        (EncryptionType::Custom, EncryptionType::Gcm, EncryptionType::Custom),
+    ];
+    for (receiver, sender, expected) in cases {
+        let key_provider = || {
+            KeyProvider::with_shared_key(
+                KeyProviderOptions::default(),
+                "password".as_bytes().to_vec(),
+            )
+        };
+        let mut receiving_options = RoomOptions::default();
+        receiving_options.encryption =
+            Some(E2eeOptions { key_provider: key_provider(), encryption_type: receiver });
+        let mut sending_options = RoomOptions::default();
+        sending_options.encryption =
+            Some(E2eeOptions { key_provider: key_provider(), encryption_type: sender });
+
+        let mut rooms =
+            test_rooms_with_options([receiving_options.into(), sending_options.into()]).await?;
+        let (sending_room, _) = rooms.pop().unwrap();
+        let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+        receiving_room.e2ee_manager().set_enabled(true);
+        sending_room.e2ee_manager().set_enabled(true);
+
+        let packet =
+            DataPacket { reliable: true, payload: b"declared".to_vec(), ..Default::default() };
+        sending_room.local_participant().publish_data(packet).await?;
+
+        let received = timeout(Duration::from_secs(5), async {
+            while let Some(event) = receiving_event_rx.recv().await {
+                if let RoomEvent::DataReceived { payload, encryption_type, .. } = event {
+                    return Some((payload, encryption_type));
+                }
+            }
+            None
+        })
+        .await?;
+
+        let (payload, encryption_type) =
+            received.expect("the receiving room closed before the packet");
+        assert_eq!(payload.as_slice(), b"declared");
+        assert_eq!(encryption_type, expected, "receiver {receiver:?}, sender declaring {sender:?}");
+    }
+    Ok(())
+}
+
+/// With more than one sender, a decrypted packet names the one that sent it, not merely the one
+/// remote participant there happens to be.
+#[cfg(feature = "__lk-e2e-test")]
+#[tokio::test]
+async fn test_data_channel_attributes_each_decrypted_packet_to_its_sender() -> Result<()> {
+    const PER_SENDER: usize = 8;
+    let options = || {
+        let mut options = RoomOptions::default();
+        options.encryption = Some(E2eeOptions {
+            key_provider: KeyProvider::with_shared_key(
+                KeyProviderOptions::default(),
+                "password".as_bytes().to_vec(),
+            ),
+            encryption_type: EncryptionType::Gcm,
+        });
+        options
+    };
+
+    let mut rooms =
+        test_rooms_with_options([options().into(), options().into(), options().into()]).await?;
+    let (second, _) = rooms.pop().unwrap();
+    let (first, _) = rooms.pop().unwrap();
+    let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+    for room in [&receiving_room, &first, &second] {
+        room.e2ee_manager().set_enabled(true);
+    }
+
+    // Each packet names its sender in its payload, so the receiver can check the attribution.
+    for _ in 0..PER_SENDER {
+        for sender in [&first, &second] {
+            let payload = sender.local_participant().identity().as_str().as_bytes().to_vec();
+            sender
+                .local_participant()
+                .publish_data(DataPacket { reliable: true, payload, ..Default::default() })
+                .await?;
+        }
+    }
+
+    let received = timeout(Duration::from_secs(5), async {
+        let mut received = 0;
+        while let Some(event) = receiving_event_rx.recv().await {
+            let RoomEvent::DataReceived { payload, participant, encryption_type, .. } = event
+            else {
+                continue;
+            };
+            assert_eq!(encryption_type, EncryptionType::Gcm);
+            let named = String::from_utf8(payload.to_vec()).unwrap();
+            assert_eq!(participant.map(|p| p.identity().as_str().to_string()), Some(named));
+            received += 1;
+            if received == PER_SENDER * 2 {
+                break;
+            }
+        }
+        received
+    })
+    .await?;
+
+    assert_eq!(received, PER_SENDER * 2);
     Ok(())
 }
