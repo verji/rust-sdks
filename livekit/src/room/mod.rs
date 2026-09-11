@@ -202,9 +202,13 @@ pub enum RoomEvent {
         topic: Option<String>,
         kind: DataPacketKind,
         participant: Option<RemoteParticipant>,
-        /// How the packet was encrypted on the wire. A room with encryption enabled still
-        /// delivers a packet its sender published in the clear, as
-        /// [`e2ee::EncryptionType::None`], so a receiver that requires encryption can refuse it.
+        /// How the packet arrived: the encryption this room is configured with, for a packet it
+        /// decrypted, or [`e2ee::EncryptionType::None`] for a packet published in the clear, which
+        /// a room with encryption enabled still delivers and a receiver that requires encryption
+        /// can refuse. Never the type the packet declares, which travels in the clear. For a
+        /// decrypted packet `participant` is the one whose key decrypted it, or `None` if that
+        /// participant is not in the room. A room configured with `None` reports `None` even for
+        /// a packet it decrypted.
         encryption_type: e2ee::EncryptionType,
     },
     TranscriptionReceived {
@@ -1822,19 +1826,23 @@ impl RoomSession {
         participant_identity: Option<ParticipantIdentity>,
         encryption_type: proto::encryption::Type,
     ) {
+        let encryption_type = e2ee::EncryptionType::from(encryption_type);
+
         let mut participant = participant_identity
             .as_ref()
             .map(|identity| self.get_participant_by_identity(identity))
             .unwrap_or(None);
 
-        if participant.is_none() {
+        // A decrypted packet belongs to the participant whose key decrypted it, which is the
+        // identity it was decrypted under, and to nobody else. The sid travels in the clear beside
+        // it and was never checked against that key, so falling back to it would let whoever
+        // forwards the packet pin one participant's encrypted data on another.
+        if participant.is_none() && encryption_type == e2ee::EncryptionType::None {
             participant = participant_sid
                 .as_ref()
                 .map(|sid| self.get_participant_by_sid(sid))
                 .unwrap_or(None);
         }
-
-        let encryption_type = e2ee::EncryptionType::from(encryption_type);
 
         // Update participant's data encryption status for regular data messages
         if let Some(ref p) = participant {

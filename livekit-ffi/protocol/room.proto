@@ -652,8 +652,9 @@ message ConnectionQualityChanged {
 message UserPacket {
   required OwnedBuffer data = 1;
   optional string topic = 2;
-  // How the packet was encrypted on the wire. NONE in a room with encryption enabled is a packet
-  // its sender published in the clear.
+  // How the packet arrived: the encryption this room is configured with, for a packet it decrypted,
+  // or NONE for a packet published in the clear, which a room with encryption enabled still
+  // delivers. Never the type the packet declares, which travels in the clear.
   required EncryptionType encryption_type = 3;
 }
 

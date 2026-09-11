@@ -130,3 +130,58 @@ async fn test_data_channel_reports_a_packet_sent_in_the_clear() -> Result<()> {
     assert_eq!(encryption_type, EncryptionType::None);
     Ok(())
 }
+
+/// What a receiver reports is the encryption it decrypted a packet under, never the type the packet
+/// declares. A sender whose own options name `None` or `Custom` still encrypts its data and puts
+/// that name in the clear wrapper, which is exactly what an SFU rewriting the field produces.
+#[cfg(feature = "__lk-e2e-test")]
+#[tokio::test]
+async fn test_data_channel_reports_the_receivers_encryption_not_the_senders_claim() -> Result<()> {
+    // (receiver configured with, sender declaring, reported)
+    let cases = [
+        (EncryptionType::Gcm, EncryptionType::None, EncryptionType::Gcm),
+        (EncryptionType::Gcm, EncryptionType::Custom, EncryptionType::Gcm),
+        (EncryptionType::Custom, EncryptionType::Gcm, EncryptionType::Custom),
+    ];
+    for (receiver, sender, expected) in cases {
+        let key_provider = || {
+            KeyProvider::with_shared_key(
+                KeyProviderOptions::default(),
+                "password".as_bytes().to_vec(),
+            )
+        };
+        let mut receiving_options = RoomOptions::default();
+        receiving_options.encryption =
+            Some(E2eeOptions { key_provider: key_provider(), encryption_type: receiver });
+        let mut sending_options = RoomOptions::default();
+        sending_options.encryption =
+            Some(E2eeOptions { key_provider: key_provider(), encryption_type: sender });
+
+        let mut rooms =
+            test_rooms_with_options([receiving_options.into(), sending_options.into()]).await?;
+        let (sending_room, _) = rooms.pop().unwrap();
+        let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+        receiving_room.e2ee_manager().set_enabled(true);
+        sending_room.e2ee_manager().set_enabled(true);
+
+        let packet =
+            DataPacket { reliable: true, payload: b"declared".to_vec(), ..Default::default() };
+        sending_room.local_participant().publish_data(packet).await?;
+
+        let received = timeout(Duration::from_secs(5), async {
+            while let Some(event) = receiving_event_rx.recv().await {
+                if let RoomEvent::DataReceived { payload, encryption_type, .. } = event {
+                    return Some((payload, encryption_type));
+                }
+            }
+            None
+        })
+        .await?;
+
+        let (payload, encryption_type) =
+            received.expect("the receiving room closed before the packet");
+        assert_eq!(payload.as_slice(), b"declared");
+        assert_eq!(encryption_type, expected, "receiver {receiver:?}, sender declaring {sender:?}");
+    }
+    Ok(())
+}
