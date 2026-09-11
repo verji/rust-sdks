@@ -1382,7 +1382,7 @@ async fn forward_event(
                 .into(),
             );
         }
-        RoomEvent::DataReceived { payload, kind, participant, topic } => {
+        RoomEvent::DataReceived { payload, kind, participant, topic, encryption_type } => {
             let handle_id = server.next_id();
             let buffer_info = proto::BufferInfo {
                 data_ptr: payload.as_ptr() as u64,
@@ -1402,6 +1402,7 @@ async fn forward_event(
                             data: buffer_info,
                         },
                         topic,
+                        encryption_type: proto::EncryptionType::from(encryption_type).into(),
                     })),
                     participant_identity: identity,
                     kind: proto::DataPacketKind::from(kind).into(),

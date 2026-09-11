@@ -202,6 +202,10 @@ pub enum RoomEvent {
         topic: Option<String>,
         kind: DataPacketKind,
         participant: Option<RemoteParticipant>,
+        /// How the packet was encrypted on the wire. A room with encryption enabled still
+        /// delivers a packet its sender published in the clear, as
+        /// [`e2ee::EncryptionType::None`], so a receiver that requires encryption can refuse it.
+        encryption_type: e2ee::EncryptionType,
     },
     TranscriptionReceived {
         participant: Option<Participant>,
@@ -1830,10 +1834,11 @@ impl RoomSession {
                 .unwrap_or(None);
         }
 
+        let encryption_type = e2ee::EncryptionType::from(encryption_type);
+
         // Update participant's data encryption status for regular data messages
         if let Some(ref p) = participant {
-            use crate::e2ee::EncryptionType;
-            let is_encrypted = EncryptionType::from(encryption_type) != EncryptionType::None;
+            let is_encrypted = encryption_type != e2ee::EncryptionType::None;
             p.update_data_encryption_status(is_encrypted);
         }
 
@@ -1842,6 +1847,7 @@ impl RoomSession {
             topic,
             kind,
             participant,
+            encryption_type,
         });
     }
 
