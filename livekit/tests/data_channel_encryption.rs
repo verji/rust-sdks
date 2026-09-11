@@ -189,3 +189,64 @@ async fn test_data_channel_reports_the_receivers_encryption_not_the_senders_clai
     }
     Ok(())
 }
+
+/// With more than one sender, a decrypted packet names the one that sent it, not merely the one
+/// remote participant there happens to be.
+#[cfg(feature = "__lk-e2e-test")]
+#[tokio::test]
+async fn test_data_channel_attributes_each_decrypted_packet_to_its_sender() -> Result<()> {
+    const PER_SENDER: usize = 8;
+    let options = || {
+        let mut options = RoomOptions::default();
+        options.encryption = Some(E2eeOptions {
+            key_provider: KeyProvider::with_shared_key(
+                KeyProviderOptions::default(),
+                "password".as_bytes().to_vec(),
+            ),
+            encryption_type: EncryptionType::Gcm,
+        });
+        options
+    };
+
+    let mut rooms =
+        test_rooms_with_options([options().into(), options().into(), options().into()]).await?;
+    let (second, _) = rooms.pop().unwrap();
+    let (first, _) = rooms.pop().unwrap();
+    let (receiving_room, mut receiving_event_rx) = rooms.pop().unwrap();
+    for room in [&receiving_room, &first, &second] {
+        room.e2ee_manager().set_enabled(true);
+    }
+
+    // Each packet names its sender in its payload, so the receiver can check the attribution.
+    for _ in 0..PER_SENDER {
+        for sender in [&first, &second] {
+            let payload = sender.local_participant().identity().as_str().as_bytes().to_vec();
+            sender
+                .local_participant()
+                .publish_data(DataPacket { reliable: true, payload, ..Default::default() })
+                .await?;
+        }
+    }
+
+    let received = timeout(Duration::from_secs(5), async {
+        let mut received = 0;
+        while let Some(event) = receiving_event_rx.recv().await {
+            let RoomEvent::DataReceived { payload, participant, encryption_type, .. } = event
+            else {
+                continue;
+            };
+            assert_eq!(encryption_type, EncryptionType::Gcm);
+            let named = String::from_utf8(payload.to_vec()).unwrap();
+            assert_eq!(participant.map(|p| p.identity().as_str().to_string()), Some(named));
+            received += 1;
+            if received == PER_SENDER * 2 {
+                break;
+            }
+        }
+        received
+    })
+    .await?;
+
+    assert_eq!(received, PER_SENDER * 2);
+    Ok(())
+}
